@@ -151,18 +151,7 @@ func (s *Store) FinishQuiz(ctx context.Context, userID string, r QuizResult) (*P
 		if w.WordID == "" {
 			continue
 		}
-		okInt := 0
-		if w.OK {
-			okInt = 1
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO word_stats (user_id, word_id, correct, wrong, last_seen)
-			VALUES (?, ?, ?, ?, ?)
-			ON DUPLICATE KEY UPDATE
-				correct   = correct + VALUES(correct),
-				wrong     = wrong + VALUES(wrong),
-				last_seen = VALUES(last_seen)
-		`, userID, w.WordID, okInt, 1-okInt, nowUnix); err != nil {
+		if err := upsertWordSRS(ctx, tx, userID, w.WordID, w.OK, now); err != nil {
 			return nil, err
 		}
 	}
@@ -202,24 +191,28 @@ func (s *Store) FinishQuiz(ctx context.Context, userID string, r QuizResult) (*P
 	return prof, tx.Commit()
 }
 
-// ReviewQueue 返回复习队列：错得多的优先，久未见的排前。
+// ReviewQueue 返回复习到期池：due_date <= 今天（东八区）的词，到期早的优先。
+// total 即「今日到期总数」——做完后归零，前端展示「今日复习已完成」。
 func (s *Store) ReviewQueue(ctx context.Context, userID string, limit int) ([]string, int, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
+	today := chinaDay(time.Now())
+
 	var total int
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM word_stats WHERE user_id = ? AND wrong > 0`, userID,
+		`SELECT COUNT(*) FROM word_stats WHERE user_id = ? AND due_date IS NOT NULL AND due_date <= ?`,
+		userID, today,
 	).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT word_id FROM word_stats
-		WHERE user_id = ? AND wrong > 0
-		ORDER BY (wrong - correct) DESC, last_seen ASC
+		WHERE user_id = ? AND due_date IS NOT NULL AND due_date <= ?
+		ORDER BY due_date ASC, (wrong - correct) DESC
 		LIMIT ?
-	`, userID, limit)
+	`, userID, today, limit)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -236,9 +229,62 @@ func (s *Store) ReviewQueue(ctx context.Context, userID string, limit int) ([]st
 	return out, total, rows.Err()
 }
 
-// ReviewResult 记录复习正误（只更新 word_stats，不计 XP 与关卡）。
+// upsertWordSRS 写入单词正误并推进 SRS（简化 SM-2）。
+// 首见词 ease=250；答对间隔沿 1->2->4->...->120 倍增封顶；答错间隔回 1、ease -20（下限 130）。
+func upsertWordSRS(ctx context.Context, tx *sql.Tx, userID, wordID string, ok bool, now time.Time) error {
+	var ease, interval int
+	err := tx.QueryRowContext(ctx,
+		`SELECT ease, interval_days FROM word_stats WHERE user_id = ? AND word_id = ?`,
+		userID, wordID,
+	).Scan(&ease, &interval)
+	switch {
+	case err == sql.ErrNoRows:
+		ease, interval = 250, 0 // 新词首见
+	case err != nil:
+		return err
+	}
+
+	newEase, newInterval := ease, interval
+	if ok {
+		if interval > 0 {
+			newInterval = interval * 2
+			if newInterval > 120 {
+				newInterval = 120
+			}
+		} else {
+			newInterval = 1
+		}
+	} else {
+		newEase = ease - 20
+		if newEase < 130 {
+			newEase = 130
+		}
+		newInterval = 1 // 明天再见
+	}
+	due := chinaDay(now.AddDate(0, 0, newInterval))
+
+	okInt := 0
+	if ok {
+		okInt = 1
+	}
+	nowUnix := now.Unix()
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO word_stats (user_id, word_id, correct, wrong, last_seen, ease, interval_days, due_date)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE
+			correct       = correct + VALUES(correct),
+			wrong         = wrong + VALUES(wrong),
+			last_seen     = VALUES(last_seen),
+			ease          = VALUES(ease),
+			interval_days = VALUES(interval_days),
+			due_date      = VALUES(due_date)
+	`, userID, wordID, okInt, 1-okInt, nowUnix, newEase, newInterval, due)
+	return err
+}
+
+// ReviewResult 记录复习正误（只推进 word_stats 的 SRS，不计 XP 与关卡）。
 func (s *Store) ReviewResult(ctx context.Context, userID string, results []WordResult) error {
-	now := time.Now().Unix()
+	now := time.Now()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -249,18 +295,7 @@ func (s *Store) ReviewResult(ctx context.Context, userID string, results []WordR
 		if w.WordID == "" {
 			continue
 		}
-		okInt := 0
-		if w.OK {
-			okInt = 1
-		}
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO word_stats (user_id, word_id, correct, wrong, last_seen)
-			VALUES (?, ?, ?, ?, ?)
-			ON DUPLICATE KEY UPDATE
-				correct   = correct + VALUES(correct),
-				wrong     = wrong + VALUES(wrong),
-				last_seen = VALUES(last_seen)
-		`, userID, w.WordID, okInt, 1-okInt, now); err != nil {
+		if err := upsertWordSRS(ctx, tx, userID, w.WordID, w.OK, now); err != nil {
 			return err
 		}
 	}

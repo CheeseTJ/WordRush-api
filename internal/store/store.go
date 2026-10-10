@@ -97,7 +97,7 @@ func ensureDatabase(cfg config.DB) error {
 	return nil
 }
 
-// initSchema 逐条执行内嵌的 DDL。
+// initSchema 逐条执行内嵌的 DDL，并对存量表做幂等列迁移。
 //
 // MySQL 驱动默认不允许一次发送多条语句，因此这里手工切分；
 // 建表语句全部是 CREATE TABLE IF NOT EXISTS，重复执行是安全的。
@@ -105,6 +105,56 @@ func initSchema(ctx context.Context, db *sql.DB) error {
 	for _, stmt := range splitStatements(schemaSQL) {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("初始化表结构失败: %w\n语句: %.120s", err, stmt)
+		}
+	}
+	return ensureColumns(ctx, db)
+}
+
+// ensureColumns 幂等列迁移：MySQL 不支持 ADD COLUMN IF NOT EXISTS，
+// 通过 information_schema 检查后再 ALTER，保证老库平滑升级、可重复启动。
+func ensureColumns(ctx context.Context, db *sql.DB) error {
+	migrations := []struct {
+		table string
+		col   string
+		ddl   string
+	}{
+		// 迭代二：SRS 间隔复习字段
+		{"word_stats", "ease", "ALTER TABLE word_stats ADD COLUMN ease SMALLINT NOT NULL DEFAULT 250"},
+		{"word_stats", "interval_days", "ALTER TABLE word_stats ADD COLUMN interval_days INT NOT NULL DEFAULT 0"},
+		{"word_stats", "due_date", "ALTER TABLE word_stats ADD COLUMN due_date DATE NULL"},
+	}
+	for _, m := range migrations {
+		var n int
+		if err := db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM information_schema.COLUMNS
+			 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+			m.table, m.col).Scan(&n); err != nil {
+			return fmt.Errorf("检查列 %s.%s 失败: %w", m.table, m.col, err)
+		}
+		if n > 0 {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, m.ddl); err != nil {
+			return fmt.Errorf("迁移列 %s.%s 失败: %w", m.table, m.col, err)
+		}
+	}
+	// 存量行回填：旧错题池整体转为「明天到期」
+	if _, err := db.ExecContext(ctx,
+		`UPDATE word_stats SET due_date = DATE(FROM_UNIXTIME(last_seen)) + INTERVAL 1 DAY
+		 WHERE due_date IS NULL`); err != nil {
+		return fmt.Errorf("回填 word_stats.due_date 失败: %w", err)
+	}
+	// SRS 查询索引
+	var n int
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM information_schema.STATISTICS
+		 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'word_stats' AND INDEX_NAME = 'idx_due'`).Scan(&n); err != nil {
+		return fmt.Errorf("检查索引 idx_due 失败: %w", err)
+	}
+	if n == 0 {
+		if _, err := db.ExecContext(ctx,
+			`ALTER TABLE word_stats ADD INDEX idx_due (user_id, due_date)`); err != nil {
+			return fmt.Errorf("创建索引 idx_due 失败: %w", err)
 		}
 	}
 	return nil
