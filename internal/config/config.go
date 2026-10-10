@@ -15,9 +15,27 @@ import (
 
 // Config 是服务的全部配置。
 type Config struct {
-	Server  Server  `yaml:"server"`
-	Ucenter Ucenter `yaml:"ucenter"`
-	DB      DB      `yaml:"db"`
+	Server    Server    `yaml:"server"`
+	Ucenter   Ucenter   `yaml:"ucenter"`
+	DB        DB        `yaml:"db"`
+	SpeakEval SpeakEval `yaml:"speak_eval"`
+}
+
+// SpeakEval 是口语跟读评分服务（OpenPronounce 微服务）配置。
+// BaseURL 留空表示功能关闭，前端自动降级浏览器识别。
+type SpeakEval struct {
+	BaseURL string `yaml:"base_url"`
+	// Timeout 单次评测超时；冷启动模型加载可能较慢，默认 30s
+	Timeout string `yaml:"timeout"`
+}
+
+// TimeoutDuration 解析评测超时，非法值回退 30 秒。
+func (s SpeakEval) TimeoutDuration() time.Duration {
+	d, err := time.ParseDuration(s.Timeout)
+	if err != nil || d <= 0 {
+		return 30 * time.Second
+	}
+	return d
 }
 
 // Server 是 HTTP 服务与 CORS 配置。
@@ -180,6 +198,8 @@ func applyEnv(c *Config) {
 	setInt(&c.DB.Port, "WORDRUSH_DB_PORT")
 	setInt(&c.DB.MaxOpenConns, "WORDRUSH_DB_MAX_OPEN_CONNS")
 	setStr(&c.DB.TLSMode, "WORDRUSH_DB_TLS_MODE")
+	setStr(&c.SpeakEval.BaseURL, "WORDRUSH_SPEAK_EVAL_URL")
+	setStr(&c.SpeakEval.Timeout, "WORDRUSH_SPEAK_EVAL_TIMEOUT")
 }
 
 func (c *Config) validate() error {

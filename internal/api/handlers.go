@@ -2,14 +2,18 @@ package api
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 
 	"wordrush/internal/auth"
 	"wordrush/internal/httpx"
+	"wordrush/internal/speak"
 	"wordrush/internal/store"
 )
 
@@ -201,6 +205,54 @@ func getStats(c *gin.Context, d Deps) {
 		"learned":      learned,
 		"days":         daily,
 	})
+}
+
+// postSpeakAssess 口语跟读评分（迭代四）：前端上传音频，转发 OpenPronounce 打分。
+func postSpeakAssess(c *gin.Context, d Deps) {
+	if d.Cfg.SpeakEval.BaseURL == "" {
+		httpx.BadRequest(c, "评测服务未开启")
+		return
+	}
+	word := strings.TrimSpace(c.PostForm("word"))
+	if word == "" || len(word) > 64 {
+		httpx.BadRequest(c, "word 不能为空且不超过 64 字符")
+		return
+	}
+	fh, err := c.FormFile("audio")
+	if err != nil {
+		httpx.BadRequest(c, "audio 文件缺失")
+		return
+	}
+	if fh.Size > 2<<20 {
+		httpx.BadRequest(c, "音频超过 2MB 上限")
+		return
+	}
+	f, err := fh.Open()
+	if err != nil {
+		httpx.BadRequest(c, "音频读取失败")
+		return
+	}
+	defer f.Close()
+	audio, err := io.ReadAll(io.LimitReader(f, 2<<20+1))
+	if err != nil {
+		httpx.Internal(c, err, "音频读取失败")
+		return
+	}
+
+	ctx, cancel := contextWithTimeout(c)
+	defer cancel()
+	client := speak.NewClient(d.Cfg.SpeakEval.BaseURL, d.Cfg.SpeakEval.TimeoutDuration())
+	res, err := client.Assess(ctx, word, audio, fh.Header.Get("Content-Type"))
+	if err != nil {
+		if errors.Is(err, speak.ErrUnavailable) {
+			// 降级约定：503 + unavailable，前端走浏览器识别
+			c.JSON(http.StatusServiceUnavailable, gin.H{"code": "unavailable", "message": err.Error()})
+			return
+		}
+		httpx.BadRequest(c, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, res)
 }
 
 func contextWithTimeout(c *gin.Context) (ctx context.Context, cancel context.CancelFunc) {
