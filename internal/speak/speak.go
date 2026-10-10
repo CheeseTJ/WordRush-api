@@ -13,6 +13,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -173,9 +174,20 @@ func extOf(contentType string) string {
 
 /* ==================== 发音 TTS（迭代四补充） ==================== */
 
+// VoicePattern 是合法 Piper voice id 的格式（防任意模型下载）。
+var voicePattern = regexp.MustCompile(`^[a-z]{2}_[A-Za-z]{2}-[a-z]+-(x_low|low|medium|high)$`)
+
+// ValidVoice 校验 voice id 是否为合法 Piper 格式。
+func ValidVoice(voice string) bool {
+	if voice == "" {
+		return true // 空 = 服务端默认音色
+	}
+	return voicePattern.MatchString(voice)
+}
+
 // Synthesize 调 OpenPronounce /tts 合成参考发音，返回 16kHz 单声道 WAV。
-// text 为待合成文本（单词或短句），lang 固定 en。
-func (c *Client) Synthesize(ctx context.Context, text string) ([]byte, error) {
+// text 为待合成文本，voice 为 Piper 音色 id（空 = 服务端默认）。
+func (c *Client) Synthesize(ctx context.Context, text, voice string) ([]byte, error) {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	if err := mw.WriteField("text", text); err != nil {
@@ -183,6 +195,11 @@ func (c *Client) Synthesize(ctx context.Context, text string) ([]byte, error) {
 	}
 	if err := mw.WriteField("lang", "en"); err != nil {
 		return nil, err
+	}
+	if voice != "" {
+		if err := mw.WriteField("voice", voice); err != nil {
+			return nil, err
+		}
 	}
 	if err := mw.Close(); err != nil {
 		return nil, err

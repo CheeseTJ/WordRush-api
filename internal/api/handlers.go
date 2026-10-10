@@ -263,8 +263,8 @@ func postSpeakAssess(c *gin.Context, d Deps) {
 // ttsMu 串行化同一文本的合成（避免并发重复调评测服务）。
 var ttsMu sync.Mutex
 
-// getSpeakTTS 发音合成（迭代四补充）：GET /speak/tts?text=word → 16kHz WAV。
-// 带磁盘缓存：同一文本只合成一次，之后直接读缓存文件。
+// getSpeakTTS 发音合成（迭代四补充）：GET /speak/tts?text=word&voice=... → 16kHz WAV。
+// 带磁盘缓存：同一「音色+文本」只合成一次，之后直接读缓存文件。
 func getSpeakTTS(c *gin.Context, d Deps) {
 	if d.Cfg.SpeakEval.BaseURL == "" {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "unavailable", "message": "发音服务未开启"})
@@ -275,9 +275,15 @@ func getSpeakTTS(c *gin.Context, d Deps) {
 		httpx.BadRequest(c, "text 不能为空且不超过 64 字符")
 		return
 	}
+	voice := strings.TrimSpace(c.Query("voice"))
+	if !speak.ValidVoice(voice) {
+		httpx.BadRequest(c, "voice 非法（Piper id 格式，如 en_US-ryan-high）")
+		return
+	}
 
+	// 缓存键含音色：不同音色互不干扰
 	cacheDir := d.Cfg.SpeakEval.CacheDirOrDefault()
-	key := fmt.Sprintf("%x.wav", sha1.Sum([]byte(text)))
+	key := fmt.Sprintf("%x.wav", sha1.Sum([]byte(voice + "|" + text)))
 	cachePath := filepath.Join(cacheDir, key)
 	if wav, err := os.ReadFile(cachePath); err == nil && len(wav) > 44 {
 		serveWav(c, wav)
@@ -292,10 +298,11 @@ func getSpeakTTS(c *gin.Context, d Deps) {
 		return
 	}
 
-	ctx, cancel := contextWithTimeout(c)
+	// 首次使用新音色需从模型库下载（~60MB），给更宽的超时
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Minute)
 	defer cancel()
 	client := speak.NewClient(d.Cfg.SpeakEval.BaseURL, d.Cfg.SpeakEval.TimeoutDuration())
-	wav, err := client.Synthesize(ctx, text)
+	wav, err := client.Synthesize(ctx, text, voice)
 	if err != nil {
 		if errors.Is(err, speak.ErrUnavailable) {
 			c.JSON(http.StatusServiceUnavailable, gin.H{"code": "unavailable", "message": err.Error()})
