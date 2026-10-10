@@ -170,3 +170,45 @@ func extOf(contentType string) string {
 		return ".webm"
 	}
 }
+
+/* ==================== 发音 TTS（迭代四补充） ==================== */
+
+// Synthesize 调 OpenPronounce /tts 合成参考发音，返回 16kHz 单声道 WAV。
+// text 为待合成文本（单词或短句），lang 固定 en。
+func (c *Client) Synthesize(ctx context.Context, text string) ([]byte, error) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if err := mw.WriteField("text", text); err != nil {
+		return nil, err
+	}
+	if err := mw.WriteField("lang", "en"); err != nil {
+		return nil, err
+	}
+	if err := mw.Close(); err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/tts", &buf)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body)
+		return nil, fmt.Errorf("%w: HTTP %d", ErrUnavailable, resp.StatusCode)
+	}
+	wav, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+	if len(wav) < 44 { // 连 WAV 头都不到，视为失败
+		return nil, ErrBadAudio
+	}
+	return wav, nil
+}

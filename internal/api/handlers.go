@@ -2,11 +2,16 @@ package api
 
 import (
 	"context"
+	"crypto/sha1"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -253,6 +258,63 @@ func postSpeakAssess(c *gin.Context, d Deps) {
 		return
 	}
 	c.JSON(http.StatusOK, res)
+}
+
+// ttsMu 串行化同一文本的合成（避免并发重复调评测服务）。
+var ttsMu sync.Mutex
+
+// getSpeakTTS 发音合成（迭代四补充）：GET /speak/tts?text=word → 16kHz WAV。
+// 带磁盘缓存：同一文本只合成一次，之后直接读缓存文件。
+func getSpeakTTS(c *gin.Context, d Deps) {
+	if d.Cfg.SpeakEval.BaseURL == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "unavailable", "message": "发音服务未开启"})
+		return
+	}
+	text := strings.TrimSpace(c.Query("text"))
+	if text == "" || len(text) > 64 {
+		httpx.BadRequest(c, "text 不能为空且不超过 64 字符")
+		return
+	}
+
+	cacheDir := d.Cfg.SpeakEval.CacheDirOrDefault()
+	key := fmt.Sprintf("%x.wav", sha1.Sum([]byte(text)))
+	cachePath := filepath.Join(cacheDir, key)
+	if wav, err := os.ReadFile(cachePath); err == nil && len(wav) > 44 {
+		serveWav(c, wav)
+		return
+	}
+
+	// 加锁合成（锁内再查一次缓存，防并发重复）
+	ttsMu.Lock()
+	defer ttsMu.Unlock()
+	if wav, err := os.ReadFile(cachePath); err == nil && len(wav) > 44 {
+		serveWav(c, wav)
+		return
+	}
+
+	ctx, cancel := contextWithTimeout(c)
+	defer cancel()
+	client := speak.NewClient(d.Cfg.SpeakEval.BaseURL, d.Cfg.SpeakEval.TimeoutDuration())
+	wav, err := client.Synthesize(ctx, text)
+	if err != nil {
+		if errors.Is(err, speak.ErrUnavailable) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"code": "unavailable", "message": err.Error()})
+			return
+		}
+		httpx.BadRequest(c, err.Error())
+		return
+	}
+	// 缓存写入失败不影响本次响应
+	if err := os.MkdirAll(cacheDir, 0o755); err == nil {
+		_ = os.WriteFile(cachePath, wav, 0o644)
+	}
+	serveWav(c, wav)
+}
+
+// serveWav 输出 WAV 并允许浏览器长期缓存（同一文本内容不变）。
+func serveWav(c *gin.Context, wav []byte) {
+	c.Header("Cache-Control", "public, max-age=31536000, immutable")
+	c.Data(http.StatusOK, "audio/wav", wav)
 }
 
 func contextWithTimeout(c *gin.Context) (ctx context.Context, cancel context.CancelFunc) {

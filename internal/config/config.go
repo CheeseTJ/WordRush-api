@@ -27,6 +27,16 @@ type SpeakEval struct {
 	BaseURL string `yaml:"base_url"`
 	// Timeout 单次评测超时；冷启动模型加载可能较慢，默认 30s
 	Timeout string `yaml:"timeout"`
+	// CacheDir 是发音 TTS 的磁盘缓存目录（默认 data/tts-cache）
+	CacheDir string `yaml:"cache_dir"`
+}
+
+// CacheDirOrDefault 返回 TTS 缓存目录。
+func (s SpeakEval) CacheDirOrDefault() string {
+	if s.CacheDir != "" {
+		return s.CacheDir
+	}
+	return "data/tts-cache"
 }
 
 // TimeoutDuration 解析评测超时，非法值回退 30 秒。
@@ -200,6 +210,7 @@ func applyEnv(c *Config) {
 	setStr(&c.DB.TLSMode, "WORDRUSH_DB_TLS_MODE")
 	setStr(&c.SpeakEval.BaseURL, "WORDRUSH_SPEAK_EVAL_URL")
 	setStr(&c.SpeakEval.Timeout, "WORDRUSH_SPEAK_EVAL_TIMEOUT")
+	setStr(&c.SpeakEval.CacheDir, "WORDRUSH_SPEAK_CACHE_DIR")
 }
 
 func (c *Config) validate() error {
