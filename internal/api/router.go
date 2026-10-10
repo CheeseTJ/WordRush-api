@@ -45,6 +45,10 @@ func Register(r *gin.Engine, d Deps) {
 		v1.GET("/review", func(c *gin.Context) { getReview(c, d) })
 		v1.POST("/review/result", func(c *gin.Context) { postReviewResult(c, d) })
 		v1.GET("/stats", func(c *gin.Context) { getStats(c, d) })
+		v1.GET("/tasks", func(c *gin.Context) { getTasks(c, d) })
+		v1.POST("/tasks/claim", func(c *gin.Context) { postTaskClaim(c, d) })
+		v1.POST("/hearts/refill", func(c *gin.Context) { postHeartsRefill(c, d) })
+		v1.POST("/freeze/buy", func(c *gin.Context) { postBuyFreeze(c, d) })
 	}
 
 	// 非 /api 路径：web_dir（前端构建产物）存在时由本进程托管 SPA，

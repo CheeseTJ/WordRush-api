@@ -12,11 +12,15 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE TABLE IF NOT EXISTS profiles (
-    user_id     VARCHAR(64) NOT NULL PRIMARY KEY,
-    xp          INT         NOT NULL DEFAULT 0,
-    streak_days INT         NOT NULL DEFAULT 0,
-    last_day    DATE        NULL,
-    updated_at  BIGINT      NOT NULL
+    user_id       VARCHAR(64) NOT NULL PRIMARY KEY,
+    xp            INT         NOT NULL DEFAULT 0,
+    streak_days   INT         NOT NULL DEFAULT 0,
+    last_day      DATE        NULL,
+    hearts        TINYINT     NOT NULL DEFAULT 5,
+    hearts_at     BIGINT      NOT NULL DEFAULT 0,
+    gems          INT         NOT NULL DEFAULT 0,
+    streak_freeze TINYINT     NOT NULL DEFAULT 0,
+    updated_at    BIGINT      NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS unit_progress (
@@ -40,11 +44,13 @@ CREATE TABLE IF NOT EXISTS word_stats (
 );
 
 CREATE TABLE IF NOT EXISTS daily_stats (
-    user_id VARCHAR(64) NOT NULL,
-    day     DATE        NOT NULL,
-    words   INT         NOT NULL DEFAULT 0,
-    correct INT         NOT NULL DEFAULT 0,
-    wrong   INT         NOT NULL DEFAULT 0,
-    xp      INT         NOT NULL DEFAULT 0,
+    user_id      VARCHAR(64) NOT NULL,
+    day          DATE        NOT NULL,
+    words        INT         NOT NULL DEFAULT 0,
+    correct      INT         NOT NULL DEFAULT 0,
+    wrong        INT         NOT NULL DEFAULT 0,
+    xp           INT         NOT NULL DEFAULT 0,
+    review_words INT         NOT NULL DEFAULT 0,
+    task_claimed TINYINT     NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, day)
 );

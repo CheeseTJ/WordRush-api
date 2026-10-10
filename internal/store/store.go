@@ -122,6 +122,13 @@ func ensureColumns(ctx context.Context, db *sql.DB) error {
 		{"word_stats", "ease", "ALTER TABLE word_stats ADD COLUMN ease SMALLINT NOT NULL DEFAULT 250"},
 		{"word_stats", "interval_days", "ALTER TABLE word_stats ADD COLUMN interval_days INT NOT NULL DEFAULT 0"},
 		{"word_stats", "due_date", "ALTER TABLE word_stats ADD COLUMN due_date DATE NULL"},
+		// 迭代三：经济系统（红心 / 宝石 / 连胜冻结 / 每日任务）
+		{"profiles", "hearts", "ALTER TABLE profiles ADD COLUMN hearts TINYINT NOT NULL DEFAULT 5"},
+		{"profiles", "hearts_at", "ALTER TABLE profiles ADD COLUMN hearts_at BIGINT NOT NULL DEFAULT 0"},
+		{"profiles", "gems", "ALTER TABLE profiles ADD COLUMN gems INT NOT NULL DEFAULT 0"},
+		{"profiles", "streak_freeze", "ALTER TABLE profiles ADD COLUMN streak_freeze TINYINT NOT NULL DEFAULT 0"},
+		{"daily_stats", "review_words", "ALTER TABLE daily_stats ADD COLUMN review_words INT NOT NULL DEFAULT 0"},
+		{"daily_stats", "task_claimed", "ALTER TABLE daily_stats ADD COLUMN task_claimed TINYINT NOT NULL DEFAULT 0"},
 	}
 	for _, m := range migrations {
 		var n int
