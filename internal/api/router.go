@@ -51,6 +51,8 @@ func Register(r *gin.Engine, d Deps) {
 		v1.POST("/freeze/buy", func(c *gin.Context) { postBuyFreeze(c, d) })
 		v1.POST("/speak/assess", func(c *gin.Context) { postSpeakAssess(c, d) })
 		v1.GET("/speak/tts", func(c *gin.Context) { getSpeakTTS(c, d) })
+		v1.POST("/chat", func(c *gin.Context) { postChat(c, d) })
+		v1.POST("/chat/stt", func(c *gin.Context) { postChatSTT(c, d) })
 	}
 
 	// 非 /api 路径：web_dir（前端构建产物）存在时由本进程托管 SPA，

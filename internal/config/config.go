@@ -19,6 +19,57 @@ type Config struct {
 	Ucenter   Ucenter   `yaml:"ucenter"`
 	DB        DB        `yaml:"db"`
 	SpeakEval SpeakEval `yaml:"speak_eval"`
+	AI        AI        `yaml:"ai"`
+}
+
+// AI 是口语对话所用的 Cloudflare Workers AI 配置。
+// AccountID 或 APIToken 留空表示功能关闭，前端隐藏对话入口。
+type AI struct {
+	AccountID string `yaml:"account_id"`
+	APIToken  string `yaml:"api_token"`
+	// Model 是 Workers AI 模型 id；留空回退 DefaultAIModel
+	Model string `yaml:"model"`
+	// BaseURL 覆盖 API 基址（默认 Cloudflare 官方端点）
+	BaseURL string `yaml:"base_url"`
+	// Timeout 单次对话超时，默认 30s
+	Timeout string `yaml:"timeout"`
+	// EnableThinking 是否开启模型思考链。GLM/Qwen 等推理模型默认思考，
+	// 闲聊场景关闭可把输出 token 降两个数量级，默认 false。
+	EnableThinking bool `yaml:"enable_thinking"`
+}
+
+// DefaultAIModel 是默认对话模型（免费额度可用、英文对话够用）。
+const DefaultAIModel = "@cf/zai-org/glm-4.7-flash"
+
+// Enabled 报告对话功能是否已配置齐凭证。
+func (a AI) Enabled() bool {
+	return strings.TrimSpace(a.AccountID) != "" && strings.TrimSpace(a.APIToken) != ""
+}
+
+// ModelOrDefault 返回模型 id，留空回退默认。
+func (a AI) ModelOrDefault() string {
+	if strings.TrimSpace(a.Model) != "" {
+		return a.Model
+	}
+	return DefaultAIModel
+}
+
+// Endpoint 返回 OpenAI 兼容的 chat completions 端点。
+func (a AI) Endpoint() string {
+	base := strings.TrimRight(strings.TrimSpace(a.BaseURL), "/")
+	if base == "" {
+		base = "https://api.cloudflare.com/client/v4"
+	}
+	return fmt.Sprintf("%s/accounts/%s/ai/v1/chat/completions", base, a.AccountID)
+}
+
+// TimeoutDuration 解析对话超时，非法值回退 30 秒。
+func (a AI) TimeoutDuration() time.Duration {
+	d, err := time.ParseDuration(a.Timeout)
+	if err != nil || d <= 0 {
+		return 30 * time.Second
+	}
+	return d
 }
 
 // SpeakEval 是口语跟读评分服务（OpenPronounce 微服务）配置。
@@ -211,6 +262,11 @@ func applyEnv(c *Config) {
 	setStr(&c.SpeakEval.BaseURL, "WORDRUSH_SPEAK_EVAL_URL")
 	setStr(&c.SpeakEval.Timeout, "WORDRUSH_SPEAK_EVAL_TIMEOUT")
 	setStr(&c.SpeakEval.CacheDir, "WORDRUSH_SPEAK_CACHE_DIR")
+	setStr(&c.AI.AccountID, "WORDRUSH_AI_ACCOUNT_ID")
+	setStr(&c.AI.APIToken, "WORDRUSH_AI_API_TOKEN")
+	setStr(&c.AI.Model, "WORDRUSH_AI_MODEL")
+	setStr(&c.AI.BaseURL, "WORDRUSH_AI_BASE_URL")
+	setStr(&c.AI.Timeout, "WORDRUSH_AI_TIMEOUT")
 }
 
 func (c *Config) validate() error {

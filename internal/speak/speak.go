@@ -41,20 +41,29 @@ func NewClient(baseURL string, timeout time.Duration) *Client {
 	}
 }
 
+// PhoneDiff 是一个音素的期望与实际读音（IPA），heard 为空表示漏读。
+type PhoneDiff struct {
+	Expected string `json:"expected"`
+	Heard    string `json:"heard"`
+}
+
 // WordError 是一个读错的词（IPA 对照与置信度）。
 type WordError struct {
-	Word       string  `json:"word"`
-	Expected   string  `json:"expected"`
-	Actual     string  `json:"actual"`
-	Confidence float64 `json:"confidence"`
+	Word       string      `json:"word"`
+	Expected   string      `json:"expected"`
+	Actual     string      `json:"actual"`
+	Confidence float64     `json:"confidence"`
+	Phones     []PhoneDiff `json:"phones,omitempty"` // 逐音素对照，heard 与 expected 不同即读错
 }
 
 // AssessResult 是一次跟读评测结果。
 type AssessResult struct {
-	Score      int         `json:"score"`     // 0-100
-	Transcript string      `json:"transcript"` // 评测服务听到的内容
-	OK         bool        `json:"ok"`        // score >= PassScore
-	Errors     []WordError `json:"errors,omitempty"`
+	Score          int         `json:"score"`     // 0-100
+	Transcript     string      `json:"transcript"` // 评测服务听到的内容
+	OK             bool        `json:"ok"`        // score >= PassScore
+	Errors         []WordError `json:"errors,omitempty"`
+	ExpectedPhones []string    `json:"expected_phones,omitempty"` // 目标词完整音素序列
+	HeardPhones    []string    `json:"heard_phones,omitempty"`    // 实际听到的音素序列（近音小误差时 errors 为空，用它逐位比对）
 }
 
 // PassScore 是跟读通过的分数线。
@@ -72,7 +81,13 @@ type opResult struct {
 			Expected   string      `json:"expected"`
 			Actual     *string     `json:"actual"` // 缺失发音时为 null
 			Confidence float64     `json:"confidence"`
+			Phones     []struct {
+				Expected string `json:"expected"`
+				Heard    string `json:"heard"`
+			} `json:"phones"`
 		} `json:"errors"`
+		ExpectedPhones [][]string `json:"expected_phones"` // 每个词的完整音素序列
+		HeardPhones    []string   `json:"heard_phones"`    // 实际听到的音素序列（扁平）
 	} `json:"differences"`
 }
 
@@ -143,12 +158,24 @@ func (c *Client) Assess(ctx context.Context, word string, audio []byte, contentT
 		if e.Actual != nil {
 			actual = *e.Actual
 		}
+		phones := make([]PhoneDiff, 0, len(e.Phones))
+		for _, p := range e.Phones {
+			phones = append(phones, PhoneDiff{Expected: p.Expected, Heard: p.Heard})
+		}
 		out.Errors = append(out.Errors, WordError{
 			Word:       e.Word,
 			Expected:   e.Expected,
 			Actual:     actual,
 			Confidence: e.Confidence,
+			Phones:     phones,
 		})
+	}
+	// 单词跟读场景只有一个目标词，取它的完整音素序列
+	if len(op.Differences.ExpectedPhones) > 0 {
+		out.ExpectedPhones = op.Differences.ExpectedPhones[0]
+	}
+	if len(op.Differences.HeardPhones) > 0 {
+		out.HeardPhones = op.Differences.HeardPhones
 	}
 	return out, nil
 }
@@ -170,6 +197,59 @@ func extOf(contentType string) string {
 	default:
 		return ".webm"
 	}
+}
+
+/* ==================== 整句转写（口语对话输入） ==================== */
+
+// Transcribe 调 OpenPronounce /speech2text，把整段录音转成文本。
+// 与 Assess 不同，这里不提供目标文本，用于口语对话的自由输入。
+func (c *Client) Transcribe(ctx context.Context, audio []byte, contentType string) (string, error) {
+	if len(audio) == 0 {
+		return "", ErrBadAudio
+	}
+	if len(audio) > maxAudioBytes {
+		return "", fmt.Errorf("音频超过 %d 字节上限", maxAudioBytes)
+	}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if err := mw.WriteField("lang", "en"); err != nil {
+		return "", err
+	}
+	fw, err := mw.CreateFormFile("file", "recording"+extOf(contentType))
+	if err != nil {
+		return "", err
+	}
+	if _, err := fw.Write(audio); err != nil {
+		return "", err
+	}
+	if err := mw.Close(); err != nil {
+		return "", err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/speech2text", &buf)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrUnavailable, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body)
+		return "", fmt.Errorf("%w: HTTP %d", ErrUnavailable, resp.StatusCode)
+	}
+
+	var out struct {
+		Transcript string `json:"transcript"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&out); err != nil {
+		return "", fmt.Errorf("转写响应解析失败: %w", err)
+	}
+	return strings.ToLower(strings.TrimSpace(out.Transcript)), nil
 }
 
 /* ==================== 发音 TTS（迭代四补充） ==================== */

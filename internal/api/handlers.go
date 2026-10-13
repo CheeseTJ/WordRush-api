@@ -16,6 +16,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"wordrush/internal/ai"
 	"wordrush/internal/auth"
 	"wordrush/internal/httpx"
 	"wordrush/internal/speak"
@@ -219,8 +220,8 @@ func postSpeakAssess(c *gin.Context, d Deps) {
 		return
 	}
 	word := strings.TrimSpace(c.PostForm("word"))
-	if word == "" || len(word) > 64 {
-		httpx.BadRequest(c, "word 不能为空且不超过 64 字符")
+	if word == "" || len(word) > 240 {
+		httpx.BadRequest(c, "word 不能为空且不超过 240 字符（支持整句跟读）")
 		return
 	}
 	fh, err := c.FormFile("audio")
@@ -244,7 +245,8 @@ func postSpeakAssess(c *gin.Context, d Deps) {
 		return
 	}
 
-	ctx, cancel := contextWithTimeout(c)
+	// 评测冷启动（whisper 首次推理）可能超过通用 5s，用 speak_eval 专属超时
+	ctx, cancel := context.WithTimeout(c.Request.Context(), d.Cfg.SpeakEval.TimeoutDuration())
 	defer cancel()
 	client := speak.NewClient(d.Cfg.SpeakEval.BaseURL, d.Cfg.SpeakEval.TimeoutDuration())
 	res, err := client.Assess(ctx, word, audio, fh.Header.Get("Content-Type"))
@@ -271,8 +273,8 @@ func getSpeakTTS(c *gin.Context, d Deps) {
 		return
 	}
 	text := strings.TrimSpace(c.Query("text"))
-	if text == "" || len(text) > 64 {
-		httpx.BadRequest(c, "text 不能为空且不超过 64 字符")
+	if text == "" || len(text) > 240 {
+		httpx.BadRequest(c, "text 不能为空且不超过 240 字符（支持整句合成）")
 		return
 	}
 	voice := strings.TrimSpace(c.Query("voice"))
@@ -322,6 +324,125 @@ func getSpeakTTS(c *gin.Context, d Deps) {
 func serveWav(c *gin.Context, wav []byte) {
 	c.Header("Cache-Control", "public, max-age=31536000, immutable")
 	c.Data(http.StatusOK, "audio/wav", wav)
+}
+
+/* ==================== 口语对话（语音 → AI → 语音） ==================== */
+
+// chatSystemPrompt 是英语陪练的角色设定：简单英文、顺带纠错、引导继续对话。
+const chatSystemPrompt = "You are a friendly English conversation partner for a Chinese learner of English. " +
+	"Reply in simple, natural everyday English, at most 2 short sentences. " +
+	"If the user makes an obvious grammar or word mistake, gently correct it first, " +
+	"then keep the conversation going with a short question."
+
+// maxChatTurns 是单次转发给模型的最大消息条数（只取最近若干条，控制上下文与额度）。
+const maxChatTurns = 10
+
+// postChat 转发对话消息给 Workers AI，返回助手回复文本。
+func postChat(c *gin.Context, d Deps) {
+	if !d.Cfg.AI.Enabled() {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "unavailable", "message": "对话服务未开启"})
+		return
+	}
+	var req struct {
+		Messages []ai.Message `json:"messages"`
+		// Thinking 按请求覆盖思考模式；缺省（nil）时用服务端配置默认值
+		Thinking *bool `json:"thinking"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		httpx.BadRequest(c, "请求体非法："+err.Error())
+		return
+	}
+	if len(req.Messages) == 0 {
+		httpx.BadRequest(c, "messages 不能为空")
+		return
+	}
+	// 只保留最近 N 条：长历史会放大输入 token，也拖慢响应
+	if len(req.Messages) > maxChatTurns {
+		req.Messages = req.Messages[len(req.Messages)-maxChatTurns:]
+	}
+	for _, m := range req.Messages {
+		if m.Role != "user" && m.Role != "assistant" {
+			httpx.BadRequest(c, "role 只能是 user / assistant")
+			return
+		}
+		if strings.TrimSpace(m.Content) == "" || len(m.Content) > 2000 {
+			httpx.BadRequest(c, "单条消息不能为空且不超过 2000 字符")
+			return
+		}
+	}
+
+	msgs := append([]ai.Message{{Role: "system", Content: chatSystemPrompt}}, req.Messages...)
+
+	// 思考模式：按请求覆盖，缺省用服务端默认。开启时思考链会占输出额度，放宽 max_tokens。
+	thinking := d.Cfg.AI.EnableThinking
+	if req.Thinking != nil {
+		thinking = *req.Thinking
+	}
+	maxTokens := 400
+	if thinking {
+		maxTokens = 1200
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), d.Cfg.AI.TimeoutDuration())
+	defer cancel()
+	client := ai.NewClient(d.Cfg.AI.Endpoint(), d.Cfg.AI.APIToken, d.Cfg.AI.ModelOrDefault(), thinking, d.Cfg.AI.TimeoutDuration())
+	reply, err := client.Chat(ctx, msgs, maxTokens)
+	if err != nil {
+		if errors.Is(err, ai.ErrQuotaExhausted) {
+			// 额度耗尽：返回稳定业务码，前端给"明天再来"的友好提示
+			c.JSON(http.StatusTooManyRequests, gin.H{"code": "quota_exhausted", "message": "今日对话额度已用完"})
+			return
+		}
+		if errors.Is(err, ai.ErrUnavailable) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"code": "unavailable", "message": err.Error()})
+			return
+		}
+		httpx.Internal(c, err, "对话失败")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"reply": reply})
+}
+
+// postChatSTT 口语对话输入：整段录音 → OpenPronounce /speech2text → 文本。
+func postChatSTT(c *gin.Context, d Deps) {
+	if d.Cfg.SpeakEval.BaseURL == "" {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": "unavailable", "message": "语音服务未开启"})
+		return
+	}
+	fh, err := c.FormFile("audio")
+	if err != nil {
+		httpx.BadRequest(c, "audio 文件缺失")
+		return
+	}
+	if fh.Size > 2<<20 {
+		httpx.BadRequest(c, "音频超过 2MB 上限")
+		return
+	}
+	f, err := fh.Open()
+	if err != nil {
+		httpx.BadRequest(c, "音频读取失败")
+		return
+	}
+	defer f.Close()
+	audio, err := io.ReadAll(io.LimitReader(f, 2<<20+1))
+	if err != nil {
+		httpx.Internal(c, err, "音频读取失败")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), d.Cfg.SpeakEval.TimeoutDuration())
+	defer cancel()
+	client := speak.NewClient(d.Cfg.SpeakEval.BaseURL, d.Cfg.SpeakEval.TimeoutDuration())
+	text, err := client.Transcribe(ctx, audio, fh.Header.Get("Content-Type"))
+	if err != nil {
+		if errors.Is(err, speak.ErrUnavailable) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"code": "unavailable", "message": err.Error()})
+			return
+		}
+		httpx.BadRequest(c, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"transcript": text})
 }
 
 func contextWithTimeout(c *gin.Context) (ctx context.Context, cancel context.CancelFunc) {
