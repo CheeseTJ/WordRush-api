@@ -1,0 +1,28 @@
+# WordRush-api · Go 后端
+
+# ---- 环境变量与本地配置（含数据库地址 / 密钥引用，绝不入库）----
+.env
+.env.local
+.env.*.local
+config.yaml
+
+# ---- 运行时数据（发音 TTS 磁盘缓存等）----
+data/
+
+# ---- 原生依赖：平台相关的动态库，按需自行放置 ----
+lib/*.so
+lib/*.dylib
+lib/*.dll
+
+# ---- 编译产物 / 测试产物 ----
+/bin/
+/wordrush
+*.exe
+*.test
+*.out
+*.prof
+
+# ---- 编辑器 / 系统 ----
+.DS_Store
+.idea/
+.vscode/
