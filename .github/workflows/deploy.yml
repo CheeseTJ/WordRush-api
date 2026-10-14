@@ -3,7 +3,7 @@ name: Deploy
 # push 到 main 自动部署到本机（self-hosted runner 与服务同机，docker 部署）
 on:
   push:
-    branches: [main]
+    branches: [master]
   workflow_dispatch: {}   # 支持在 GitHub 页面手动触发
 
 jobs:
