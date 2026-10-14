@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS daily_stats (
     wrong        INT         NOT NULL DEFAULT 0,
     xp           INT         NOT NULL DEFAULT 0,
     review_words INT         NOT NULL DEFAULT 0,
+    chat_done    INT         NOT NULL DEFAULT 0,
     task_claimed TINYINT     NOT NULL DEFAULT 0,
     PRIMARY KEY (user_id, day)
 );

@@ -50,6 +50,14 @@ const (
 	gemTaskNew   = 20
 	gemTaskReview = 10
 	gemTaskStar  = 15
+	gemTaskChat  = 10              // 每日任务：完成 1 次情景对话
+
+	// 情景对话奖励（迭代五）：按星级发 XP/宝石，每日最多 chatDailyCap 次有奖励，
+	// 防止反复刷同一场对话无限套利。
+	chatDailyCap  = 3
+	chatXpPerStar = 5
+	chatGem3Star  = 2
+	chatGem2Star  = 1
 )
 
 // DailyStat 是一天的学习统计。
@@ -500,6 +508,7 @@ const (
 	taskBitNew = 1 << iota // 新学 20 词
 	taskBitReview          // 复习 10 词
 	taskBitStar            // 三星一关
+	taskBitChat            // 完成 1 次情景对话
 )
 
 // Tasks 返回今日三条任务：新学 20 词 / 复习 10 词 / 三星一关。
@@ -510,10 +519,10 @@ func (s *Store) Tasks(ctx context.Context, userID string) ([]Task, error) {
 		return nil, err
 	}
 
-	var words, reviewWords, claimed int
+	var words, reviewWords, chatDone, claimed int
 	row := s.db.QueryRowContext(ctx,
-		`SELECT words, review_words, task_claimed FROM daily_stats WHERE user_id = ? AND day = ?`, userID, today)
-	if err := row.Scan(&words, &reviewWords, &claimed); err != nil && err != sql.ErrNoRows {
+		`SELECT words, review_words, chat_done, task_claimed FROM daily_stats WHERE user_id = ? AND day = ?`, userID, today)
+	if err := row.Scan(&words, &reviewWords, &chatDone, &claimed); err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
 
@@ -529,6 +538,7 @@ func (s *Store) Tasks(ctx context.Context, userID string) ([]Task, error) {
 		{ID: "new", Label: fmt.Sprintf("新学 %d 个单词", taskNewTarget), Target: taskNewTarget, Current: words, Reward: gemTaskNew},
 		{ID: "review", Label: fmt.Sprintf("复习 %d 个单词", taskReviewTarget), Target: taskReviewTarget, Current: reviewWords, Reward: gemTaskReview},
 		{ID: "star", Label: "拿到一次三星通关", Target: 1, Current: starCount, Reward: gemTaskStar},
+		{ID: "chat", Label: "完成 1 次情景对话", Target: 1, Current: chatDone, Reward: gemTaskChat},
 	}
 	for i := range tasks {
 		t := &tasks[i]
@@ -543,6 +553,8 @@ func (s *Store) Tasks(ctx context.Context, userID string) ([]Task, error) {
 			t.Claimed = claimed&taskBitReview != 0
 		case "star":
 			t.Claimed = claimed&taskBitStar != 0
+		case "chat":
+			t.Claimed = claimed&taskBitChat != 0
 		}
 	}
 	return tasks, nil
@@ -558,6 +570,8 @@ func (s *Store) ClaimTask(ctx context.Context, userID, id string) (int, error) {
 		bit, reward, target = taskBitReview, gemTaskReview, taskReviewTarget
 	case "star":
 		bit, reward, target = taskBitStar, gemTaskStar, 1
+	case "chat":
+		bit, reward, target = taskBitChat, gemTaskChat, 1
 	default:
 		return 0, fmt.Errorf("任务不存在")
 	}
@@ -589,8 +603,10 @@ func (s *Store) ClaimTask(ctx context.Context, userID, id string) (int, error) {
 			return 0, err
 		}
 	} else {
+		// new/review/chat 各读自己的进度列（review 之前误读 words，已修正）
+		col := map[string]string{"new": "words", "review": "review_words", "chat": "chat_done"}[id]
 		if err := tx.QueryRowContext(ctx,
-			`SELECT words FROM daily_stats WHERE user_id = ? AND day = ?`, userID, today,
+			`SELECT `+col+` FROM daily_stats WHERE user_id = ? AND day = ?`, userID, today,
 		).Scan(&cur); err != nil {
 			return 0, err
 		}
@@ -680,4 +696,84 @@ func (s *Store) BuyFreeze(ctx context.Context, userID string) (*Profile, error) 
 		return nil, err
 	}
 	return prof, tx.Commit()
+}
+
+/* ==================== 迭代五：情景对话结算 ==================== */
+
+// CompleteScenario 记录一次情景对话完成并结算奖励。
+//
+// 星级由服务端按目标达成率推算（见 api 层），这里只负责发奖与计数：
+// 每日前 chatDailyCap 次有 XP/宝石（按星级），之后只累计次数不发奖，
+// 防止反复刷同一场对话套利。XP 同时推进连胜（与通关同一套 last_day 规则）。
+func (s *Store) CompleteScenario(ctx context.Context, userID string, stars int) (xpGained, gemsGained int, err error) {
+	if stars < 0 {
+		stars = 0
+	}
+	if stars > 3 {
+		stars = 3
+	}
+	now := time.Now()
+	day := chinaDay(now)
+	nowUnix := now.Unix()
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer tx.Rollback()
+
+	// 保证当日行存在
+	if _, err := tx.ExecContext(ctx,
+		`INSERT IGNORE INTO daily_stats (user_id, day) VALUES (?, ?)`, userID, day); err != nil {
+		return 0, 0, err
+	}
+
+	// 每日奖励上限：超限只计数不发奖
+	var chatDone int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT chat_done FROM daily_stats WHERE user_id = ? AND day = ?`, userID, day,
+	).Scan(&chatDone); err != nil {
+		return 0, 0, err
+	}
+	xpGained, gemsGained = 0, 0
+	if chatDone < chatDailyCap {
+		xpGained = stars * chatXpPerStar
+		switch stars {
+		case 3:
+			gemsGained = chatGem3Star
+		case 2:
+			gemsGained = chatGem2Star
+		}
+	}
+
+	// 每日统计：次数 +1，XP 累加
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO daily_stats (user_id, day, chat_done, xp)
+		VALUES (?, ?, 1, ?)
+		ON DUPLICATE KEY UPDATE chat_done = chat_done + 1, xp = xp + VALUES(xp)
+	`, userID, day, xpGained); err != nil {
+		return 0, 0, err
+	}
+
+	// 档案：XP/宝石累加 + 连胜推进（与 FinishQuiz 同一套规则）
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO profiles (user_id, xp, streak_days, last_day, updated_at, gems)
+		VALUES (?, ?, 1, ?, ?, ?)
+		ON DUPLICATE KEY UPDATE
+			xp          = xp + VALUES(xp),
+			streak_days = IF(
+				last_day = DATE_SUB(VALUES(last_day), INTERVAL 1 DAY), streak_days + 1,
+				IF(last_day = VALUES(last_day), streak_days,
+					IF(streak_freeze > 0, streak_days, 1))),
+			streak_freeze = IF(
+				last_day >= DATE_SUB(VALUES(last_day), INTERVAL 1 DAY), streak_freeze,
+				GREATEST(streak_freeze - 1, 0)),
+			last_day    = VALUES(last_day),
+			gems        = gems + VALUES(gems),
+			updated_at  = VALUES(updated_at)
+	`, userID, xpGained, day, nowUnix, gemsGained); err != nil {
+		return 0, 0, err
+	}
+
+	return xpGained, gemsGained, tx.Commit()
 }

@@ -128,6 +128,7 @@ func ensureColumns(ctx context.Context, db *sql.DB) error {
 		{"profiles", "gems", "ALTER TABLE profiles ADD COLUMN gems INT NOT NULL DEFAULT 0"},
 		{"profiles", "streak_freeze", "ALTER TABLE profiles ADD COLUMN streak_freeze TINYINT NOT NULL DEFAULT 0"},
 		{"daily_stats", "review_words", "ALTER TABLE daily_stats ADD COLUMN review_words INT NOT NULL DEFAULT 0"},
+		{"daily_stats", "chat_done", "ALTER TABLE daily_stats ADD COLUMN chat_done INT NOT NULL DEFAULT 0"},
 		{"daily_stats", "task_claimed", "ALTER TABLE daily_stats ADD COLUMN task_claimed TINYINT NOT NULL DEFAULT 0"},
 	}
 	for _, m := range migrations {
