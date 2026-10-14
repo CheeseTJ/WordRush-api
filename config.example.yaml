@@ -1,0 +1,40 @@
+# wordrush 运行配置模板（复制为 config.yaml 后按需修改；该文件不入库）。
+# 密钥不留在这里：DB 密码 / CF AI Token 等用 WORDRUSH_* 环境变量覆盖（见 .env）。
+server:
+  addr: ":8092"
+  # 浏览器直连白名单；前端经 Pages _redirects 同域代理时其实用不到，留作直连备用
+  allowed_origins:
+    - "https://eng.taojun.top"
+    - "http://localhost:5174"
+
+ucenter:
+  base_url: "https://ucenter.june-t.top"
+  app: "wordrush"
+  jwks_ttl: "1h"
+
+db:
+  # HeatWave 内网地址与账号来自 ./.env（单一来源见 /home/ubuntu/db/.env）
+  host: "10.0.0.226"
+  port: 3306
+  name: "wordrush"
+  user: "junet"
+  # HeatWave 内部域名是自签证书，不能用 true（会强制校验证书而失败）
+  tls_mode: "preferred"
+  max_open_conns: 8
+  max_idle_conns: 4
+  conn_max_lifetime_sec: 180
+
+speak_eval:
+  # OpenPronounce 发音评测微服务（python venv: /home/ubuntu/speak-eval）
+  # 本机裸跑 / docker host 网络用 http://127.0.0.1:8100
+  base_url: "http://127.0.0.1:8100"
+  timeout: "60s"
+
+ai:
+  # 口语对话（Cloudflare Workers AI，OpenAI 兼容端点）
+  # api_token 不入库，来自 ./.env 的 WORDRUSH_AI_API_TOKEN
+  account_id: "1b53bebb48213cfdf6e43cd71d931741"
+  model: "@cf/zai-org/glm-4.7-flash"
+  timeout: "30s"
+  # 关闭模型思考链：闲聊场景可把输出 token 降两个数量级（省额度、更快）
+  enable_thinking: false

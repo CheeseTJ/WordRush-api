@@ -1,0 +1,85 @@
+name: Deploy
+
+# push 到 main 自动部署到本机（self-hosted runner 与服务同机，docker 部署）
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}   # 支持在 GitHub 页面手动触发
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 不清理未跟踪文件，保住 runner 工作区里的本地状态
+          clean: false
+
+      - name: Write config.yaml
+        run: |
+          # 生产配置直接写在 workflow 里（不含任何密钥），改配置改这里。
+          # 密钥（DB 密码 / CF AI Token）由 .env 的 WORDRUSH_* 环境变量覆盖。
+          cat > config.yaml <<'CONFIG'
+          server:
+            addr: "127.0.0.1:8092"
+            allowed_origins:
+              - "https://eng.taojun.top"
+              - "http://localhost:5174"
+
+          ucenter:
+            base_url: "https://ucenter.june-t.top"
+            app: "wordrush"
+            jwks_ttl: "1h"
+
+          db:
+            host: "10.0.0.226"
+            port: 3306
+            name: "wordrush"
+            user: "junet"
+            # HeatWave 内部域名是自签证书，不能用 true（会强制校验证书而失败）
+            tls_mode: "preferred"
+            max_open_conns: 8
+            max_idle_conns: 4
+            conn_max_lifetime_sec: 180
+
+          speak_eval:
+            # host 网络，宿主机上的评测微服务直接 127.0.0.1 可达
+            base_url: "http://127.0.0.1:8100"
+            timeout: "60s"
+
+          ai:
+            account_id: "1b53bebb48213cfdf6e43cd71d931741"
+            model: "@cf/zai-org/glm-4.7-flash"
+            timeout: "30s"
+            enable_thinking: false
+          CONFIG
+
+      - name: Write .env from local single source
+        run: |
+          # 密钥单一来源是宿主机 /home/ubuntu/code/WordRush/WordRush-api/.env
+          # （shell 格式，内部 source /home/ubuntu/db/.env）。source 后导出成
+          # env_file 需要的 KEY=VALUE 纯格式。
+          # 注意：密码含 $，必须转义成 $$，否则 docker compose 会把 $xxx
+          # 当变量插值导致密码截断（Access denied）。
+          set -a; source /home/ubuntu/code/WordRush/WordRush-api/.env; set +a
+          esc() { printf '%s' "${1//\$/\$\$}"; }
+          {
+            echo "WORDRUSH_DB_HOST=$(esc "$WORDRUSH_DB_HOST")"
+            echo "WORDRUSH_DB_PORT=$(esc "$WORDRUSH_DB_PORT")"
+            echo "WORDRUSH_DB_NAME=$(esc "$WORDRUSH_DB_NAME")"
+            echo "WORDRUSH_DB_USER=$(esc "$WORDRUSH_DB_USER")"
+            echo "WORDRUSH_DB_PASSWORD=$(esc "$WORDRUSH_DB_PASSWORD")"
+            echo "WORDRUSH_DB_TLS_MODE=$(esc "$WORDRUSH_DB_TLS_MODE")"
+            echo "WORDRUSH_UCENTER_BASE_URL=$(esc "$WORDRUSH_UCENTER_BASE_URL")"
+            echo "WORDRUSH_UCENTER_APP=$(esc "$WORDRUSH_UCENTER_APP")"
+            echo "WORDRUSH_AI_ACCOUNT_ID=$(esc "$WORDRUSH_AI_ACCOUNT_ID")"
+            echo "WORDRUSH_AI_API_TOKEN=$(esc "$WORDRUSH_AI_API_TOKEN")"
+            echo "WORDRUSH_AI_MODEL=$(esc "$WORDRUSH_AI_MODEL")"
+          } > .env
+          chmod 600 .env
+
+      - name: Backup current image
+        run: sudo docker tag wordrush-api:latest wordrush-api:backup || true
+
+      - name: Build & Up
+        run: sudo docker compose up -d --build

@@ -1,0 +1,30 @@
+# 固定 compose 项目名，避免目录改名导致容器/卷名漂移
+name: wordrush
+
+services:
+  wordrush-api:
+    build: .
+    image: wordrush-api:latest
+    container_name: wordrush-api
+    # 自启动 + 崩溃自动重启
+    restart: unless-stopped
+    env_file:
+      # 密钥文件不入库，由 deploy workflow 从宿主机单一来源生成
+      - .env
+    # host 网络：OCI 主机上 bridge 网络到 VCN 内网（HeatWave 10.0.0.x）不通，
+    # 与 music-api / remind 一致改用 host 模式；服务地址绑回环，仅 cloudflared 可达
+    network_mode: host
+    volumes:
+      # 配置文件每次部署由 workflow 重写，绑定挂载保证读到最新
+      - ./config.yaml:/app/config.yaml:ro
+      # 用命名卷而非绑定挂载：runner 工作区重建容器时 TTS 缓存不丢
+      - wordrush-api-data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8092/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  wordrush-api-data:
