@@ -25,6 +25,8 @@ jobs:
             allowed_origins:
               - "https://eng.taojun.top"
               - "http://localhost:5174"
+              # CI/CD 控制台的「监控」视图由浏览器直连 /api/health，需放行其来源
+              - "https://cicd.taojun.top"
 
           ucenter:
             base_url: "https://ucenter.june-t.top"
