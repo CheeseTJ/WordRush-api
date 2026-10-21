@@ -166,7 +166,17 @@ func postBuyFreeze(c *gin.Context, d Deps) {
 // getReview 返回复习队列（错题单词 ID 列表）。
 func getReview(c *gin.Context, d Deps) {
 	limit, _ := strconv.Atoi(c.Query("limit"))
-	ids, total, err := d.Store.ReviewQueue(c.Request.Context(), auth.UserID(c), limit)
+	// exclude：客户端当天已复习/已展示过的词，逗号分隔。
+	// 用于分批复习时取「下一批」，否则 SQL 排序会让已复习的词反复出现在队首。
+	var exclude []string
+	if raw := strings.TrimSpace(c.Query("exclude")); raw != "" {
+		for _, id := range strings.Split(raw, ",") {
+			if id = strings.TrimSpace(id); id != "" {
+				exclude = append(exclude, id)
+			}
+		}
+	}
+	ids, total, err := d.Store.ReviewQueue(c.Request.Context(), auth.UserID(c), limit, exclude)
 	if err != nil {
 		httpx.Internal(c, err, "读取复习队列失败")
 		return
@@ -207,11 +217,11 @@ func getStats(c *gin.Context, d Deps) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"xp":           prof.XP,
-		"streak_days":  prof.StreakDays,
-		"level":        prof.XP/500 + 1,
-		"learned":      learned,
-		"days":         daily,
+		"xp":          prof.XP,
+		"streak_days": prof.StreakDays,
+		"level":       prof.XP/500 + 1,
+		"learned":     learned,
+		"days":        daily,
 	})
 }
 
@@ -287,7 +297,7 @@ func getSpeakTTS(c *gin.Context, d Deps) {
 
 	// 缓存键含音色：不同音色互不干扰
 	cacheDir := d.Cfg.SpeakEval.CacheDirOrDefault()
-	key := fmt.Sprintf("%x.wav", sha1.Sum([]byte(voice + "|" + text)))
+	key := fmt.Sprintf("%x.wav", sha1.Sum([]byte(voice+"|"+text)))
 	cachePath := filepath.Join(cacheDir, key)
 	if wav, err := os.ReadFile(cachePath); err == nil && len(wav) > 44 {
 		serveWav(c, wav)

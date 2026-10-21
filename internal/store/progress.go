@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -38,19 +39,19 @@ type FinishOutcome struct {
 
 // 经济系统常量（迭代三）。
 const (
-	maxHearts    = 5               // 红心上限
-	heartRefill  = 30 * time.Minute // 每 30 分钟自然回 1 心
-	refillCost   = 25              // 宝石补满红心
-	freezeCost   = 200             // 宝石购买连胜冻结
-	freezeCap    = 2               // 冻结持有上限
-	gemPass      = 10              // 通关奖励
-	gemCombo5    = 5               // 连击 5 里程碑
-	taskNewTarget  = 20            // 每日任务：新学 20 词
-	taskReviewTarget = 10         // 每日任务：复习 10 词
-	gemTaskNew   = 20
-	gemTaskReview = 10
-	gemTaskStar  = 15
-	gemTaskChat  = 10              // 每日任务：完成 1 次情景对话
+	maxHearts        = 5                // 红心上限
+	heartRefill      = 30 * time.Minute // 每 30 分钟自然回 1 心
+	refillCost       = 25               // 宝石补满红心
+	freezeCost       = 200              // 宝石购买连胜冻结
+	freezeCap        = 2                // 冻结持有上限
+	gemPass          = 10               // 通关奖励
+	gemCombo5        = 5                // 连击 5 里程碑
+	taskNewTarget    = 20               // 每日任务：新学 20 词
+	taskReviewTarget = 10               // 每日任务：复习 10 词
+	gemTaskNew       = 20
+	gemTaskReview    = 10
+	gemTaskStar      = 15
+	gemTaskChat      = 10 // 每日任务：完成 1 次情景对话
 
 	// 情景对话奖励（迭代五）：按星级发 XP/宝石，每日最多 chatDailyCap 次有奖励，
 	// 防止反复刷同一场对话无限套利。
@@ -293,7 +294,14 @@ func (s *Store) FinishQuiz(ctx context.Context, userID string, r QuizResult) (*F
 
 // ReviewQueue 返回复习到期池：due_date <= 今天（东八区）的词，到期早的优先。
 // total 即「今日到期总数」——做完后归零，前端展示「今日复习已完成」。
-func (s *Store) ReviewQueue(ctx context.Context, userID string, limit int) ([]string, int, error) {
+// ReviewQueue 返回今日到期复习词。
+//
+// exclude 是客户端当天已经复习过（或已展示过）的词 id。为什么要它：
+// 复习一个词会把它的 due_date 推到明天，但 SQL 排序是
+// `due_date ASC, (wrong-correct) DESC`，同一批未复习的词仍会排在最前面。
+// 客户端分批复习时，如果只靠 LIMIT 翻页，第 2 次请求又会拿到刚复习过的
+// 那批词，导致要么死循环、要么永远看不到后面真正的新词。
+func (s *Store) ReviewQueue(ctx context.Context, userID string, limit int, exclude []string) ([]string, int, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
@@ -307,12 +315,10 @@ func (s *Store) ReviewQueue(ctx context.Context, userID string, limit int) ([]st
 		return nil, 0, err
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT word_id FROM word_stats
-		WHERE user_id = ? AND due_date IS NOT NULL AND due_date <= ?
-		ORDER BY due_date ASC, (wrong - correct) DESC
-		LIMIT ?
-	`, userID, today, limit)
+	// 动态拼 NOT IN，参数化避免注入。
+	query, args := reviewQueueSQL(userID, today, limit, exclude)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -327,6 +333,36 @@ func (s *Store) ReviewQueue(ctx context.Context, userID string, limit int) ([]st
 		out = append(out, id)
 	}
 	return out, total, rows.Err()
+}
+
+// reviewQueueSQL 拼装复习队列查询。
+//
+// 抽成独立函数是为了能离线测试 SQL 与参数顺序——这段逻辑出错的代价很高
+// （参数错位会导致 NOT IN 到错误的列，或占位符数量与参数不匹配直接报错），
+// 而它本身是纯函数，没必要为了测试引入数据库依赖。
+//
+// exclude 上限 500：占位符过多会让 SQL 文本膨胀，且当天复习上限远低于此。
+func reviewQueueSQL(userID, today string, limit int, exclude []string) (string, []any) {
+	query := `
+		SELECT word_id FROM word_stats
+		WHERE user_id = ? AND due_date IS NOT NULL AND due_date <= ?`
+	args := []any{userID, today}
+
+	if len(exclude) > 0 {
+		if len(exclude) > 500 {
+			exclude = exclude[:500]
+		}
+		placeholders := make([]string, len(exclude))
+		for i, id := range exclude {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+		query += ` AND word_id NOT IN (` + strings.Join(placeholders, ",") + `)`
+	}
+
+	query += ` ORDER BY due_date ASC, (wrong - correct) DESC LIMIT ?`
+	args = append(args, limit)
+	return query, args
 }
 
 // upsertWordSRS 写入单词正误并推进 SRS（简化 SM-2）。
@@ -505,10 +541,10 @@ type Task struct {
 
 // task_claimed 位图
 const (
-	taskBitNew = 1 << iota // 新学 20 词
-	taskBitReview          // 复习 10 词
-	taskBitStar            // 三星一关
-	taskBitChat            // 完成 1 次情景对话
+	taskBitNew    = 1 << iota // 新学 20 词
+	taskBitReview             // 复习 10 词
+	taskBitStar               // 三星一关
+	taskBitChat               // 完成 1 次情景对话
 )
 
 // Tasks 返回今日三条任务：新学 20 词 / 复习 10 词 / 三星一关。
