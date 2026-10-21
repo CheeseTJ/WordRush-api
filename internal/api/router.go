@@ -12,6 +12,7 @@ import (
 	"wordrush/internal/auth"
 	"wordrush/internal/config"
 	"wordrush/internal/httpx"
+	"wordrush/internal/release"
 	"wordrush/internal/store"
 )
 
@@ -20,6 +21,7 @@ type Deps struct {
 	Cfg     *config.Config
 	Store   *store.Store
 	Fetcher *auth.Fetcher
+	Release *release.Client
 }
 
 // Register 挂载全部路由。
@@ -34,6 +36,10 @@ func Register(r *gin.Engine, d Deps) {
 	})
 
 	r.GET("/api/health", func(c *gin.Context) { health(c, d) })
+
+	// 客户端版本检查：公开接口（未登录也要能升级），
+	// 否则老版本用户会卡在登录失败的循环里出不来。
+	r.GET("/api/app/version", func(c *gin.Context) { getAppVersion(c, d) })
 
 	v1 := r.Group("/api/v1")
 	v1.Use(auth.Middleware(d.Fetcher, d.Cfg.Ucenter.App))

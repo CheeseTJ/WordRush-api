@@ -4,6 +4,9 @@
 .env
 .env.local
 .env.*.local
+# 手动部署时从 .env（shell 格式）展开出来的 docker env_file，同样含密钥
+.env.compose
+.env.docker
 config.yaml
 
 # ---- 运行时数据（发音 TTS 磁盘缓存等）----

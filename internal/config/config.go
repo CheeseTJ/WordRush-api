@@ -20,6 +20,32 @@ type Config struct {
 	DB        DB        `yaml:"db"`
 	SpeakEval SpeakEval `yaml:"speak_eval"`
 	AI        AI        `yaml:"ai"`
+	App       App       `yaml:"app"`
+}
+
+// App 是安卓客户端的版本更新配置。
+//
+// 查询链路：App 直连蒲公英开放 API 拿版本与下载地址（国内 CDN，稳定）。
+// 服务端这里只提供「渠道参数 + 强制更新阈值」这类**需要随版本调整、
+// 又不方便每次都重新发版**的字段，避免把 API Key 硬编码进前端包。
+type App struct {
+	// PgyerAppKey 是蒲公英上该 App 的 App Key（同一 App 各版本相同，可公开）
+	PgyerAppKey string `yaml:"pgyer_app_key"`
+	// PgyerAPIKey 是蒲公英开放 API 密钥。**属敏感信息**，不入库，
+	// 由 WORDRUSH_APP_PGYER_API_KEY 环境变量注入。
+	// 留空表示客户端不做自动检查更新，只在「我的」页给蒲公英页面入口。
+	PgyerAPIKey string `yaml:"pgyer_api_key"`
+	// MinSupportedVersionCode 是允许使用的最低 versionCode。
+	// 客户端上报的版本低于它时，服务端回 force=true，前端弹不可取消的强制更新。
+	// 0 表示不限制。
+	MinSupportedVersionCode int `yaml:"min_supported_version_code"`
+	// DownloadPage 兜底下载页（蒲公英短链或自建页），API 不可用时给用户。
+	DownloadPage string `yaml:"download_page"`
+}
+
+// Enabled 报告是否配齐了蒲公英凭据（缺一不可）。
+func (a App) Enabled() bool {
+	return strings.TrimSpace(a.PgyerAppKey) != "" && strings.TrimSpace(a.PgyerAPIKey) != ""
 }
 
 // AI 是口语对话所用的 Cloudflare Workers AI 配置。
@@ -242,7 +268,6 @@ func defaultConfig() *Config {
 		DB: DB{Port: 3306, TLSMode: "preferred"},
 	}
 }
-
 func applyEnv(c *Config) {
 	setStr(&c.Server.Addr, "WORDRUSH_SERVER_ADDR")
 	setStr(&c.Server.WebDir, "WORDRUSH_WEB_DIR")
@@ -251,6 +276,11 @@ func applyEnv(c *Config) {
 	}
 	setStr(&c.Ucenter.BaseURL, "WORDRUSH_UCENTER_BASE_URL")
 	setStr(&c.Ucenter.App, "WORDRUSH_UCENTER_APP")
+	// App 更新：API Key 属密钥，只从环境变量注入，绝不写进配置文件
+	setStr(&c.App.PgyerAppKey, "WORDRUSH_APP_PGYER_APP_KEY")
+	setStr(&c.App.PgyerAPIKey, "WORDRUSH_APP_PGYER_API_KEY")
+	setStr(&c.App.DownloadPage, "WORDRUSH_APP_DOWNLOAD_PAGE")
+	setInt(&c.App.MinSupportedVersionCode, "WORDRUSH_APP_MIN_VERSION_CODE")
 	setStr(&c.DB.DSN, "WORDRUSH_DB_DSN")
 	setStr(&c.DB.Host, "WORDRUSH_DB_HOST")
 	setStr(&c.DB.Name, "WORDRUSH_DB_NAME")

@@ -21,6 +21,7 @@ import (
 	"wordrush/internal/api"
 	"wordrush/internal/auth"
 	"wordrush/internal/config"
+	"wordrush/internal/release"
 	"wordrush/internal/store"
 )
 
@@ -51,7 +52,15 @@ func main() {
 	r := gin.Default()
 	r.Use(corsMiddleware(cfg.Server.AllowedOrigins))
 
-	api.Register(r, api.Deps{Cfg: cfg, Store: st, Fetcher: fetcher})
+	// 蒲公英版本查询客户端：凭据缺失时 Enabled=false，接口只回下载页兜底
+	rel := release.NewClient(cfg.App.PgyerAPIKey, cfg.App.PgyerAppKey)
+	if rel.Enabled() {
+		log.Printf("客户端更新已启用（蒲公英 app_key=%s…）", maskKey(cfg.App.PgyerAppKey))
+	} else {
+		log.Printf("客户端更新未启用：缺少 WORDRUSH_APP_PGYER_API_KEY / WORDRUSH_APP_PGYER_APP_KEY")
+	}
+
+	api.Register(r, api.Deps{Cfg: cfg, Store: st, Fetcher: fetcher, Release: rel})
 
 	srv := &http.Server{Addr: cfg.Server.Addr, Handler: r}
 	go func() {
@@ -73,6 +82,15 @@ func main() {
 		log.Printf("HTTP 服务关闭异常: %v", err)
 	}
 	log.Println("已退出")
+}
+
+// maskKey 只保留密钥首尾各 4 位，用于日志里确认「配置的是哪一把」而不泄露。
+func maskKey(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) <= 8 {
+		return "****"
+	}
+	return s[:4] + "…" + s[len(s)-4:]
 }
 
 // corsMiddleware 允许前端站点跨域直连。

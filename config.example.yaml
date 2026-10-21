@@ -6,6 +6,9 @@ server:
   allowed_origins:
     - "https://eng.taojun.top"
     - "http://localhost:5174"
+    # Capacitor 壳内 WebView 的 origin（androidScheme: https → https://localhost）
+    - "https://localhost"
+    - "capacitor://localhost"
 
 ucenter:
   base_url: "https://ucenter.june-t.top"

@@ -27,6 +27,10 @@ jobs:
               - "http://localhost:5174"
               # CI/CD 控制台的「监控」视图由浏览器直连 /api/health，需放行其来源
               - "https://cicd.taojun.top"
+              # Capacitor 安卓壳：androidScheme=https 时 WebView 的 origin 就是 https://localhost
+              # （iOS 壳为 capacitor://localhost）。缺这两条则 App 内所有请求被 CORS 拦掉
+              - "https://localhost"
+              - "capacitor://localhost"
 
           ucenter:
             base_url: "https://ucenter.june-t.top"
@@ -57,6 +61,13 @@ jobs:
           CONFIG
 
       - name: Write .env from local single source
+        env:
+          # 蒲公英发版渠道：在 GitHub 仓库 Settings → Secrets 里配置。
+          # 不配也不会导致部署失败，后端会降级为「不提供自动更新」。
+          PGYER_APP_KEY: ${{ secrets.PGYER_APP_KEY }}
+          PGYER_API_KEY: ${{ secrets.PGYER_API_KEY }}
+          PGYER_PAGE_URL: ${{ secrets.PGYER_PAGE_URL }}
+          APP_MIN_VERSION_CODE: ${{ secrets.APP_MIN_VERSION_CODE }}
         run: |
           # 密钥单一来源是宿主机 /home/ubuntu/code/WordRush/WordRush-api/.env
           # （shell 格式，内部 source /home/ubuntu/db/.env）。source 后导出成
@@ -77,6 +88,12 @@ jobs:
             echo "WORDRUSH_AI_ACCOUNT_ID=$(esc "$WORDRUSH_AI_ACCOUNT_ID")"
             echo "WORDRUSH_AI_API_TOKEN=$(esc "$WORDRUSH_AI_API_TOKEN")"
             echo "WORDRUSH_AI_MODEL=$(esc "$WORDRUSH_AI_MODEL")"
+            # 客户端更新（蒲公英）。App Key 可公开，API Key 属密钥。
+            # 从 GitHub Secrets 注入，避免写进 workflow 文件本身。
+            echo "WORDRUSH_APP_PGYER_APP_KEY=$(esc "${PGYER_APP_KEY:-}")"
+            echo "WORDRUSH_APP_PGYER_API_KEY=$(esc "${PGYER_API_KEY:-}")"
+            echo "WORDRUSH_APP_DOWNLOAD_PAGE=$(esc "${PGYER_PAGE_URL:-}")"
+            echo "WORDRUSH_APP_MIN_VERSION_CODE=$(esc "${APP_MIN_VERSION_CODE:-0}")"
           } > .env
           chmod 600 .env
 

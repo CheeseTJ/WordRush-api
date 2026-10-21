@@ -10,7 +10,9 @@ services:
     restart: unless-stopped
     env_file:
       # 密钥文件不入库，由 deploy workflow 从宿主机单一来源生成
-      - .env
+      # 本地手动部署时 .env 是 shell 格式（含 source），docker 读不了，
+      # 可用 WORDRUSH_ENV_FILE 指向已展开的纯 KEY=VALUE 文件
+      - ${WORDRUSH_ENV_FILE:-.env}
     # host 网络：OCI 主机上 bridge 网络到 VCN 内网（HeatWave 10.0.0.x）不通，
     # 与 music-api / remind 一致改用 host 模式；服务地址绑回环，仅 cloudflared 可达
     network_mode: host
