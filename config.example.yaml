@@ -16,27 +16,28 @@ ucenter:
   jwks_ttl: "1h"
 
 db:
-  # HeatWave 内网地址与账号来自 ./.env（单一来源见 /home/ubuntu/db/.env）
-  host: "10.0.0.226"
+  # 数据库地址与账号建议全部走环境变量（WORDRUSH_DB_*），这里只做兜底。
+  # 不要把真实内网地址写进仓库。
+  host: "db.example.internal"
   port: 3306
   name: "wordrush"
-  user: "junet"
-  # HeatWave 内部域名是自签证书，不能用 true（会强制校验证书而失败）
+  user: "wordrush"
+  # 托管 MySQL 的内部域名常是自签证书，不能用 true（会强制校验证书而失败）
   tls_mode: "preferred"
   max_open_conns: 8
   max_idle_conns: 4
   conn_max_lifetime_sec: 180
 
 speak_eval:
-  # OpenPronounce 发音评测微服务（python venv: /home/ubuntu/server/speak-eval）
+  # 发音评测微服务（如 OpenPronounce，Python venv 或容器）
   # 本机裸跑 / docker host 网络用 http://127.0.0.1:8100
   base_url: "http://127.0.0.1:8100"
   timeout: "60s"
 
 ai:
   # 口语对话（Cloudflare Workers AI，OpenAI 兼容端点）
-  # api_token 不入库，来自 ./.env 的 WORDRUSH_AI_API_TOKEN
-  account_id: "1b53bebb48213cfdf6e43cd71d931741"
+  # api_token / account_id 不入库，由 WORDRUSH_AI_API_TOKEN / WORDRUSH_AI_ACCOUNT_ID 注入
+  account_id: "<your-cloudflare-account-id>"
   model: "@cf/zai-org/glm-4.7-flash"
   timeout: "30s"
   # 关闭模型思考链：闲聊场景可把输出 token 降两个数量级（省额度、更快）

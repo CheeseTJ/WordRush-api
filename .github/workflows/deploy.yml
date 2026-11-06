@@ -47,11 +47,13 @@ jobs:
             jwks_ttl: "1h"
 
           db:
-            host: "10.0.0.226"
+            # 留空：由 .env 的 WORDRUSH_DB_HOST 注入（见下方 Write .env step）。
+            # 不要把真实内网地址写进仓库——仓库是公开的。
+            host: ""
             port: 3306
             name: "wordrush"
-            user: "junet"
-            # HeatWave 内部域名是自签证书，不能用 true（会强制校验证书而失败）
+            user: "wordrush"
+            # 托管 MySQL 的内部域名常是自签证书，不能用 true（会强制校验证书而失败）
             tls_mode: "preferred"
             max_open_conns: 8
             max_idle_conns: 4
@@ -63,7 +65,8 @@ jobs:
             timeout: "60s"
 
           ai:
-            account_id: "1b53bebb48213cfdf6e43cd71d931741"
+            # 账号 ID 由 .env 的 WORDRUSH_AI_ACCOUNT_ID 覆盖，不写进仓库
+            account_id: ""
             model: "@cf/zai-org/glm-4.7-flash"
             timeout: "30s"
             enable_thinking: false
@@ -78,9 +81,8 @@ jobs:
           PGYER_PAGE_URL: ${{ secrets.PGYER_PAGE_URL }}
           APP_MIN_VERSION_CODE: ${{ secrets.APP_MIN_VERSION_CODE }}
         run: |
-          # 密钥单一来源是宿主机 /home/ubuntu/server/secrets/wordrush/.env
-          # （shell 格式，内部 source /home/ubuntu/db/.env）。source 后导出成
-          # env_file 需要的 KEY=VALUE 纯格式。
+          # 密钥单一来源是宿主机上的一个 shell 环境文件（内部再 source 数据库凭据）。
+          # source 后导出成 env_file 需要的 KEY=VALUE 纯格式。
           # 注意：密码含 $，必须转义成 $$，否则 docker compose 会把 $xxx
           # 当变量插值导致密码截断（Access denied）。
           set -a; source /home/ubuntu/server/secrets/wordrush/.env; set +a
