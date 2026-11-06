@@ -28,7 +28,7 @@ db:
   conn_max_lifetime_sec: 180
 
 speak_eval:
-  # OpenPronounce 发音评测微服务（python venv: /home/ubuntu/speak-eval）
+  # OpenPronounce 发音评测微服务（python venv: /home/ubuntu/server/speak-eval）
   # 本机裸跑 / docker host 网络用 http://127.0.0.1:8100
   base_url: "http://127.0.0.1:8100"
   timeout: "60s"

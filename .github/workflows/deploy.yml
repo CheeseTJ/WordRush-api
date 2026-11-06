@@ -69,12 +69,12 @@ jobs:
           PGYER_PAGE_URL: ${{ secrets.PGYER_PAGE_URL }}
           APP_MIN_VERSION_CODE: ${{ secrets.APP_MIN_VERSION_CODE }}
         run: |
-          # 密钥单一来源是宿主机 /home/ubuntu/code/WordRush/WordRush-api/.env
+          # 密钥单一来源是宿主机 /home/ubuntu/server/secrets/wordrush/.env
           # （shell 格式，内部 source /home/ubuntu/db/.env）。source 后导出成
           # env_file 需要的 KEY=VALUE 纯格式。
           # 注意：密码含 $，必须转义成 $$，否则 docker compose 会把 $xxx
           # 当变量插值导致密码截断（Access denied）。
-          set -a; source /home/ubuntu/code/WordRush/WordRush-api/.env; set +a
+          set -a; source /home/ubuntu/server/secrets/wordrush/.env; set +a
           esc() { printf '%s' "${1//\$/\$\$}"; }
           {
             echo "WORDRUSH_DB_HOST=$(esc "$WORDRUSH_DB_HOST")"
